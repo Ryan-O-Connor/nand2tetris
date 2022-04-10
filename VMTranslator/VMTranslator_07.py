@@ -36,6 +36,10 @@ class VMTranslator:
                     segment = parser.arg1()
                     index = parser.arg2()
                     self.coder.writePush(segment, index)
+                elif cmd_type == C_POP:
+                    segment = parser.arg1()
+                    index = parser.arg2()
+                    self.coder.writePop(segment, index)
 
 
     @staticmethod
@@ -87,7 +91,9 @@ class Parser:
             return C_ARITHMETIC
         elif cmd_type == "push":
             return C_PUSH
-        return None
+        elif cmd_type == "pop":
+            return C_POP
+        raise SyntaxError("Unidentified command {}".format(cmd_type))
 
     def arg1(self):
         cmd = self.tokenizeCommand()
@@ -172,11 +178,20 @@ class Coder:
         self.writeAinst("SP")
         self.write("M=M-1")
 
+    def writeLoadAddress2D(self, address):
+        self.writeAinst(address)
+        self.write("D=A")
+
     def writeValue2Address(self, address, value):
         # Write value to address
         self.writeAinst(str(value))
         self.write("D=A")
         self.writeAinst(str(address))
+        self.write("M=D")
+
+    def writeD2Pointer(self, pointer):
+        # Write value in D register to pointer address
+        self.writeLoadPointerAddress(pointer, "A")
         self.write("M=D")
 
     def writeLoadPointerAddress(self, pointer, register):
@@ -269,10 +284,49 @@ class Coder:
             self.write("M=!M")
         self.incrementSP()
 
+    def writeR13OffsetAddress(self, segment, index):
+        # Write offset constant into R13 register
+        self.writeValue2Address("R13", str(index))
+        # Load base address of segment into D register
+        if segment == "local":
+            self.writeLoadPointerAddress("LCL", "D")
+        elif segment == "argument":
+            self.writeLoadPointerAddress("ARG", "D")
+        elif segment == "this":
+            self.writeLoadPointerAddress("THIS", "D")
+        elif segment == "that":
+            self.writeLoadPointerAddress("THAT", "D")
+        elif segment == "temp":
+            self.writeLoadAddress2D("R5")
+        elif segment == "static":
+            self.writeLoadAddress2D("16")
+        elif segment == "pointer":
+            self.writeLoadAddress2D("R3")
+        # Add base address to R13 (it is now target address)
+        self.writeAinst("R13")
+        self.write("M=D+M")
+
     def writePush(self, segment, index):
         if segment == "constant":
             self.writeValue2Pointer("SP", index)
-            self.incrementSP()
+        else:
+            # Set target address in R13 register
+            self.writeR13OffsetAddress(segment, index)
+            # Load value of target address into D register
+            self.writeLoadPointerAddressValue("R13", "D")
+            # Assign D register to SP's target address
+            self.writeD2Pointer("SP")
+        self.incrementSP()
+
+    def writePop(self, segment, index):
+        # Set target address in R13 register
+        self.writeR13OffsetAddress(segment, index)
+        # Pop the top value of stack into D register
+        self.decrementSP()
+        self.writeLoadPointerAddressValue("SP", "D")
+        # Assign D register to R13's target address
+        self.writeD2Pointer("R13")
+            
 
 
 if __name__ == '__main__':
