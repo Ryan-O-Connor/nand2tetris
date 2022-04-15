@@ -27,6 +27,7 @@ class VMTranslator:
     def translate(self):
         # Translate each vm command until each parser exhausted
         for parser in self.parsers:
+            self.coder.set_file_name(parser.get_file_name())
             parser.preprocess()
             while parser.hasMoreCommands():
                 parser.advance()
@@ -101,6 +102,7 @@ class Parser:
 
     def __init__(self, vm_file):
         file_handle = open(vm_file, 'rt')
+        self.file_name = vm_file.split("\\")[-1].split(".")[0]
         self.file_lines = file_handle.readlines()
         self.num_lines = len(self.file_lines)
         self.line_index = -1
@@ -108,6 +110,9 @@ class Parser:
 
     def reset(self):
         self.line_index = -1
+
+    def get_file_name(self):
+        return self.file_name
 
     def currentCommand(self):
         return self.file_lines[self.line_index]
@@ -201,41 +206,22 @@ class Coder:
         self.comparison_ops = ("eq", "gt", "lt")
         self.unary_ops = ("neg", "not")
         self.current_function = None
+        self.current_file = None
         self.label_id = 0
         self.setup()
 
     def __del__(self):
         self.file_handle.close()
 
+    def set_file_name(self, name):
+        self.current_file = name
+
     def setup(self):
         # Bootstrap code
+        # The call to Sys.init should never be returned from, so 
+        # it's technically redundant and wastes 5 stack spaces
         self.writeValue2Address("SP", 256)
-        self.writeAinst("Sys.init")
-        self.write("0;JMP")
-        # self.writeValue2Address("SP", 317)
-        # self.writeValue2Address("LCL", 317)
-        # self.writeValue2Address("ARG", 310)
-        # self.writeValue2Address("THIS", 3000)
-        # self.writeValue2Address("THAT", 4000)
-        # self.writeValue2Address("310", 1234)
-        # self.writeValue2Address("311", 37)
-        # self.writeValue2Address("312", 1000)
-        # self.writeValue2Address("313", 305)
-        # self.writeValue2Address("314", 300)
-        # self.writeValue2Address("315", 3010)
-        # self.writeValue2Address("316", 4010)
-        # set RAM[0] 317,
-        # set RAM[1] 317,
-        # set RAM[2] 310,
-        # set RAM[3] 3000,
-        # set RAM[4] 4000,
-        # set RAM[310] 1234,
-        # set RAM[311] 37,
-        # set RAM[312] 1000,
-        # set RAM[313] 305,
-        # set RAM[314] 300,
-        # set RAM[315] 3010,
-        # set RAM[316] 4010,
+        self.writeCall("Sys.init", num_args=0)
     
     def write(self, string):
         # Write command to file
@@ -296,26 +282,32 @@ class Coder:
         self.write("M=D")
 
     def writeR13OffsetAddress(self, segment, index):
-        # Write offset constant into R13 register
-        self.writeValue2Address("R13", str(index))
-        # Load base address of segment into D register
-        if segment == "local":
-            self.writeLoadPointerAddress("LCL", "D")
-        elif segment == "argument":
-            self.writeLoadPointerAddress("ARG", "D")
-        elif segment == "this":
-            self.writeLoadPointerAddress("THIS", "D")
-        elif segment == "that":
-            self.writeLoadPointerAddress("THAT", "D")
-        elif segment == "temp":
-            self.writeLoadAddress2D("R5")
-        elif segment == "static":
-            self.writeLoadAddress2D("16")
-        elif segment == "pointer":
-            self.writeLoadAddress2D("R3")
-        # Add base address to R13 (it is now target address)
-        self.writeAinst("R13")
-        self.write("M=D+M")     
+        # Set target segment index address in R13 register
+        if segment == "static":
+            static_label = self.current_file + "." + str(index)
+            self.writeAinst(static_label)
+            self.write("D=A")
+            self.writeAinst("R13")
+            self.write("M=D")
+        else:
+            # Write offset constant into R13 register
+            self.writeValue2Address("R13", str(index))
+            # Load base address of segment into D register
+            if segment == "local":
+                self.writeLoadPointerAddress("LCL", "D")
+            elif segment == "argument":
+                self.writeLoadPointerAddress("ARG", "D")
+            elif segment == "this":
+                self.writeLoadPointerAddress("THIS", "D")
+            elif segment == "that":
+                self.writeLoadPointerAddress("THAT", "D")
+            elif segment == "temp":
+                self.writeLoadAddress2D("R5")
+            elif segment == "pointer":
+                self.writeLoadAddress2D("R3")
+            # Add base address to R13 (it is now target address)
+            self.writeAinst("R13")
+            self.write("M=D+M")
 
     # High level coding methods
 
@@ -402,6 +394,7 @@ class Coder:
             self.writeLoadPointerAddressValue("R13", "D")
             # Assign D register to SP's target address
             self.writeD2Pointer("SP")
+
         self.incrementSP()
 
     def writePop(self, segment, index):
@@ -447,7 +440,7 @@ class Coder:
     def writeCall(self, function_name, num_args):
         # Call function
         # Create unique return address and push onto stack
-        return_address = self.current_function + "$" + function_name + "_" + str(self.label_id)
+        return_address = function_name + "_" + str(self.label_id)
         self.label_id += 1
         self.writeAinst(return_address)
         self.write("D=A")
