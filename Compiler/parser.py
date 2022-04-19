@@ -3,6 +3,11 @@ import sys
 from common import *
 
 
+binaryOps = {"+", "-", "*", "/", "&", "|", "<", ">", "="}
+unaryOps = {"-", "~"}
+keyword_constants = {"true", "false", "null", "this"}
+
+
 class Parser:
 
     def __init__(self, lexer, output_file):
@@ -221,21 +226,72 @@ class Parser:
             self.parseTerminal(L_SYMBOL, ")")
 
     def parseExpression(self):
+        # expression := term (op term)*
         self.ast.addNonterminalNode("expression")
         self.parseTerm()
+        while True:
+            self.lexer.peek()
+            if self.lexer.tokenWord() not in binaryOps:
+                break
+            self.parseBinaryOp()
+            self.parseTerm()
         self.ast.endFocus()
 
     def parseTerm(self):
+        # term := integerConstant | stringConstant | keywordConstant | 
+        #           varName | varName '[' expression ']' | subroutineCall |
+        #           '(' expression ')' | unaryOp term
         self.ast.addNonterminalNode("term")
-        self.parseTerminal(L_IDENTIFIER)
+        self.lexer.peek()
+        next_word_type = self.lexer.tokenType()
+        next_word = self.lexer.tokenWord()
+        if next_word_type == L_INT:
+            self.parseTerminal(L_INT)
+        elif next_word_type == L_STR:
+            self.parseTerminal(L_STR)
+        elif next_word in keyword_constants:
+            self.parseTerminal(L_KEYWORD)
+        elif next_word == "(":
+            self.parseTerminal(L_SYMBOL, "(")
+            self.parseExpression()
+            self.parseTerminal(L_SYMBOL, ")")
+        elif next_word in unaryOps:
+            self.parseUnaryOp()
+            self.parseTerm()
+        else:
+            # Next word must be identifier, but we must peek again
+            self.lexer.peek(again=True)
+            next_next_word = self.lexer.tokenWord()
+            if next_next_word == "[":
+                self.parseTerminal(L_IDENTIFIER)
+                self.parseTerminal(L_SYMBOL, "[")
+                self.parseExpression()
+                self.parseTerminal(L_SYMBOL, "]")
+            elif next_next_word == "(" or next_next_word == ".":
+                self.parseCall()
+            else:
+                self.parseTerminal(L_IDENTIFIER)
         self.ast.endFocus()
 
     def parseExpressionList(self):
+        # expressionList := (expression (',' expression)* )?
         self.ast.addNonterminalNode("expressionList")
         self.lexer.peek()
-        if self.lexer.tokenType() == L_SYMBOL:
+        if self.lexer.tokenWord() != ")":
+            self.parseExpression()
+        while True:
+            self.lexer.peek()
+            if self.lexer.tokenWord() != ",":
+                break
+            self.parseTerminal(L_SYMBOL, ",")
             self.parseExpression()
         self.ast.endFocus()
+
+    def parseBinaryOp(self):
+        self.parseTerminal(L_SYMBOL)
+
+    def parseUnaryOp(self):
+        self.parseTerminal(L_SYMBOL)
 
 
 class XMLParseTree:
@@ -302,6 +358,13 @@ class ParseTest:
         parser = Parser(lexer, "out.xml")
         parser.parse()
 
+    def test_peek():
+        assert(len(sys.argv)==2)
+        jack_file = sys.argv[1]
+        lexer = Lexer(jack_file)
+        parser = Parser(lexer, "out.xml")
+        for _ in range(10):
+            parser.lexer.peek(again=True)
 
 if __name__ == '__main__':
     from lexer import Lexer
