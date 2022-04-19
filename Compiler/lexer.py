@@ -79,7 +79,7 @@ class Lexer:
         self.file_handle = open(jack_file, "rt")
         self.DFA = JackLexemeDFA()
         self.character_stack = []
-        self.peeked = False
+        self.token_queue = []
         self.token = None
         self.EOF = False
 
@@ -89,15 +89,20 @@ class Lexer:
     def hasMoreTokens(self):
         return not self.EOF
 
-    def peek(self):
-        # Peek single token ahead, if haven't already
-        if not self.peeked:
-            self.advance()
-            self.peeked = True
+    def peek(self, again=False):
+        # Advance token stream to peek ahead, but don't consume token
+        if self.token_queue and not again:
+            # Don't peek more tokens, just the next one
+            self.token = self.token_queue[0]
+        else:
+            # Continue to peek further tokens ahead
+            self.advance(again=True)
+            self.token_queue.append(self.token)
 
-    def advance(self):
+    def advance(self, again=False):
         # Advance to next significant lexeme in file stream
-        if not self.peeked:
+        if again or not self.token_queue:
+            # No peeked tokens in the queue or continue advancing again anyway
             while self.hasMoreTokens():
                 self.DFA.reset()
                 while not self.EOF:
@@ -115,7 +120,8 @@ class Lexer:
                     break
             self.token = Token(word=self.DFA.getLexeme(), token_type=self.DFA.getType())
         else:
-            self.peeked = False
+            # Already peeked token in the queue
+            self.token = self.token_queue.pop(0)
 
     def ungetCh(self, c):
         self.character_stack.append(c)
