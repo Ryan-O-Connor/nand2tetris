@@ -39,4 +39,4 @@ L_STR = 4
 L_COMMENT = 5
 L_SPACE = 6
 
-LexemeTypeMap = {L_IDENTIFIER: "identifier", L_KEYWORD: "keyword", L_SYMBOL: "symbol", L_INT: "integer", L_STR: "string", L_COMMENT: "comment", L_SPACE: "space"}
+LexemeTypeMap = {L_IDENTIFIER: "identifier", L_KEYWORD: "keyword", L_SYMBOL: "symbol", L_INT: "integerConstant", L_STR: "stringConstant", L_COMMENT: "comment", L_SPACE: "space"}
