@@ -26,7 +26,7 @@ class SymbolTable:
         # Get count of number of variables of this kind in this scope
         return self.varCounts[kind]
 
-    def _getRecord(self, name):
+    def getRecord(self, name):
         record = self.function_st.get(name)
         if record is None:
             record = self.class_st.get(name)
@@ -34,14 +34,14 @@ class SymbolTable:
         return record
 
     def kindOf(self, name):
-        record = self._getRecord(name)
+        record = self.getRecord(name)
         return record[1]
 
     def typeOf(self, name):
-        record = self._getRecord(name)
+        record = self.getRecord(name)
         return record[0]
 
     def indexOf(self, name):
-        record = self._getRecord(name)
+        record = self.getRecord(name)
         return record[2]
 
