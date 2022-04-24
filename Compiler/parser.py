@@ -1,6 +1,8 @@
 import sys
 
 from common import *
+from symboltable import SymbolTable
+from VMwriter import VMWriter
 
 
 binaryOps = {"+", "-", "*", "/", "&", "|", "<", ">", "="}
@@ -12,10 +14,12 @@ class Parser:
 
     def __init__(self, lexer, output_file):
         self.lexer = lexer
-        self.token_stack = []
+        self.st = SymbolTable()
         self.ast = XMLParseTree(output_file)
+        self.writer = VMWriter(output_file)
+        self.class_name = None
 
-    def parse(self):
+    def compile(self):
         # Each file consists of a single class to be parsed
         self.parseClass()
 
@@ -26,12 +30,13 @@ class Parser:
         if expected_value is not None:
             assert(self.lexer.tokenWord() == expected_value)
         self.ast.addTerminalNode(self.lexer.getToken())
+        return self.lexer.tokenWord()
 
     def parseClass(self):
         # class := 'class' className '{' classVarDec* subroutineDec* '}'
         self.ast.addNonterminalNode("class")
         self.parseTerminal(L_KEYWORD, "class")
-        self.parseTerminal(L_IDENTIFIER)
+        self.class_name = self.parseTerminal(L_IDENTIFIER)
         self.parseTerminal(L_SYMBOL, "{")
         while True:
             self.lexer.peek()
@@ -48,10 +53,13 @@ class Parser:
         self.parseTerminal(L_SYMBOL, "}")
         self.ast.endFocus()
 
-    def parseAnyVarDec(self):
-        # anyVarDec := type varName (',' varName)* ';'
-        self.parseType()
-        self.parseTerminal(L_IDENTIFIER)
+    def parseClassVarDec(self):
+        # classVarDec := ('static' | 'field') type varName (',' varName)* ';'
+        self.ast.addNonterminalNode("classVarDec")
+        var_kind = self.parseTerminal(L_KEYWORD)
+        var_type = self.parseType()
+        var_name = self.parseTerminal(L_IDENTIFIER)
+        self.st.define(var_name, var_type, var_kind)
         while True:
             self.lexer.peek()
             if self.lexer.tokenWord() != ',':
@@ -59,19 +67,23 @@ class Parser:
             self.parseTerminal(L_SYMBOL, ',')
             self.parseTerminal(L_IDENTIFIER)
         self.parseTerminal(L_SYMBOL, ';')
-
-    def parseClassVarDec(self):
-        # classVarDec := ('static' | 'field') type varName (',' varName)* ';'
-        self.ast.addNonterminalNode("classVarDec")
-        self.parseTerminal(L_KEYWORD)
-        self.parseAnyVarDec()
         self.ast.endFocus()
 
     def parseVarDec(self):
         # varDec := 'var' type varName (',' varName)* ';'
         self.ast.addNonterminalNode("varDec")
-        self.parseTerminal(L_KEYWORD)
-        self.parseAnyVarDec()
+        self.parseTerminal(L_KEYWORD, "var")
+        var_type = self.parseType()
+        var_name = self.parseTerminal(L_IDENTIFIER)
+        self.st.define(var_name, var_type, "var")
+        while True:
+            self.lexer.peek()
+            if self.lexer.tokenWord() != ',':
+                break
+            self.parseTerminal(L_SYMBOL, ',')
+            var_name = self.parseTerminal(L_IDENTIFIER)
+            self.st.define(var_name, var_type, "var")
+        self.parseTerminal(L_SYMBOL, ';')
         self.ast.endFocus()
         
     def parseType(self):
@@ -84,20 +96,23 @@ class Parser:
             self.parseTerminal(L_IDENTIFIER)
         else:
             raise SyntaxError("Expected type, but got {}".format(self.lexer.tokenWord()))
+        return self.tokenType()
 
     def parseSubroutine(self):
         # subroutineDec := ('constructor' | 'function' | 'method' ) ('void' | type) subroutineName '(' parameterList ')' subroutineBody
+        self.st.startSubroutine()
         self.ast.addNonterminalNode("subroutineDec")
         self.parseTerminal(L_KEYWORD)
         self.lexer.peek()
         if self.lexer.tokenWord() == "void":
-            self.parseTerminal(L_KEYWORD)
+            self.parseTerminal(L_KEYWORD, "void")
         else:
             self.parseTerminal(L_IDENTIFIER)
-        self.parseTerminal(L_IDENTIFIER)
+        func_name = self.parseTerminal(L_IDENTIFIER)
         self.parseTerminal(L_SYMBOL, "(")
-        self.parseParameterList()
+        n_locals = self.parseParameterList()
         self.parseTerminal(L_SYMBOL, ")")
+        self.writer.writeFunction(self.class_name + "." + func_name, n_locals)
         # subroutineBody := '{' varDec* statements '}'
         self.ast.addNonterminalNode("subroutineBody")
         self.parseTerminal(L_SYMBOL, "{")
@@ -113,11 +128,14 @@ class Parser:
         
     def parseParameterList(self):
         # parametersList := ((type varName) (',' type varName)*)?
+        n_locals = 0
         self.ast.addNonterminalNode("parameterList")
         self.lexer.peek()
         if self.lexer.tokenWord() != ")":
-            self.parseType()
-            self.parseTerminal(L_IDENTIFIER)
+            var_type = self.parseType()
+            var_name = self.parseTerminal(L_IDENTIFIER)
+            self.st.define(var_name, var_type, "argument")
+            n_locals += 1
             while True:
                 self.lexer.peek()
                 if self.lexer.tokenWord() != ",":
@@ -125,7 +143,9 @@ class Parser:
                 self.parseTerminal(L_SYMBOL, ",")
                 self.parseType()
                 self.parseTerminal(L_IDENTIFIER)
+                n_locals += 1
         self.ast.endFocus()
+        return n_locals
 
     def parseStatements(self):
         # statements = (letStatement | ifStatement | whileStatement | doStatement | returnStatement)*
@@ -155,16 +175,33 @@ class Parser:
         self.parseTerminal(L_SYMBOL, ";")
         self.ast.endFocus()
 
+    def parseCall(self):
+        # call := subroutineName '(' expressionList ')' | (className | varName) '.' subroutineName '(' expressionList ')'
+        self.parseTerminal(L_IDENTIFIER)
+        self.lexer.peek()
+        if self.lexer.tokenWord() == "(":
+            self.parseTerminal(L_SYMBOL, "(")
+            self.parseExpressionList()
+            self.parseTerminal(L_SYMBOL, ")")
+        else:
+            self.parseTerminal(L_SYMBOL, ".")
+            self.parseTerminal(L_IDENTIFIER)
+            self.parseTerminal(L_SYMBOL, "(")
+            self.parseExpressionList()
+            self.parseTerminal(L_SYMBOL, ")")
+
     def parseLet(self):
         # letStatement := 'let' varName ('[' expression ']')? '=' expression ';'
         self.ast.addNonterminalNode("letStatement")
         self.parseTerminal(L_KEYWORD, "let")
-        self.parseTerminal(L_IDENTIFIER)
+        var_name = self.parseTerminal(L_IDENTIFIER)
         self.lexer.peek()
         if self.lexer.tokenWord() == '[':
             self.parseTerminal(L_SYMBOL, "[")
             self.parseExpression()
             self.parseTerminal(L_SYMBOL, "]")
+        else:
+            pass
         self.parseTerminal(L_SYMBOL, "=")
         self.parseExpression()
         self.parseTerminal(L_SYMBOL, ";")
@@ -210,23 +247,8 @@ class Parser:
             self.parseTerminal(L_SYMBOL, "}")
         self.ast.endFocus()
 
-    def parseCall(self):
-        # call := subroutineName '(' expressionList ')' | (className | varName) '.' subroutineName '(' expressionList ')'
-        self.parseTerminal(L_IDENTIFIER)
-        self.lexer.peek()
-        if self.lexer.tokenWord() == "(":
-            self.parseTerminal(L_SYMBOL, "(")
-            self.parseExpressionList()
-            self.parseTerminal(L_SYMBOL, ")")
-        else:    
-            self.parseTerminal(L_SYMBOL, ".")
-            self.parseTerminal(L_IDENTIFIER)
-            self.parseTerminal(L_SYMBOL, "(")
-            self.parseExpressionList()
-            self.parseTerminal(L_SYMBOL, ")")
-
     def parseExpression(self):
-        # expression := term (op term)*
+        # expression := term (op term)*``
         self.ast.addNonterminalNode("expression")
         self.parseTerm()
         while True:
@@ -246,7 +268,8 @@ class Parser:
         next_word_type = self.lexer.tokenType()
         next_word = self.lexer.tokenWord()
         if next_word_type == L_INT:
-            self.parseTerminal(L_INT)
+            int_const = self.parseTerminal(L_INT)
+            self.writer.writePush("constant", int_const)
         elif next_word_type == L_STR:
             self.parseTerminal(L_STR)
         elif next_word in keyword_constants:
